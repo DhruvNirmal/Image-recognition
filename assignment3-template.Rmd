@@ -1,0 +1,445 @@
+---
+title: "ETC3250/5250 IML Asignment 3 Solution"
+author: Dhruv Nirmal (32797710)
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: show
+---
+
+
+```{r, message = FALSE, echo = -1}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+set.seed(2023)
+# Load the packages that you will use to complete this assignment.
+library(tidyverse)
+library(purrr)
+library(dplyr)
+library(rpart)
+library(ggplot2)
+library(ggpubr)
+library(kknn)
+library(ranger)
+library(xgboost)
+library(rsample)
+library(factoextra)
+library(yardstick)
+```
+
+
+## Preliminary analysis
+
+```{r}
+data1 <- read.csv(here::here("data32797710.csv"))
+new_records <- read.csv(here::here("newrecords32797710.csv"))
+```
+
+
+### Question 1) What is the letter in your data? (1 mark)
+
+```{r}
+set.seed(2023)
+imagedata_to_plotdata_1 <- function(data = data1, 
+                                  w = 28, 
+                                  h = 28, 
+                                  which = sample(1:3397, 1)) {
+  data %>% 
+    mutate(id = 1:n()) %>% 
+    filter(id %in% which) %>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+plot_letter <- imagedata_to_plotdata_1(data1) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) + 
+    scale_y_reverse() +
+    theme_void(base_size = 18) +
+    guides(fill = "none") +
+    coord_equal()
+
+plot_letter
+```
+
+
+### Question 2) Plot a random sample of 12 images, like below, of your data with the correct orientation.
+
+```{r}
+set.seed(2023)
+imagedata_to_plotdata_2 <- function(data = data1, 
+                                  w = 28, 
+                                  h = 28,
+                                  which = sample(1:3397, 12)) {
+  data %>% 
+    mutate(id = 1:n())%>% 
+    filter(id %in% which) %>%
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+plot_letter2 <- imagedata_to_plotdata_2(data1) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) +
+    facet_wrap(~id, nrow = 3) +
+    scale_y_reverse() +
+    theme_void(base_size = 18) +
+    guides(fill = "none") +
+    coord_equal()
+
+plot_letter2
+```
+
+### Question 3) Perform a principal component analysis (PCA) on your data. How much variation does the first 5 principal components explain in the data?
+
+```{r}
+set.seed(2023)
+data1_pca <- prcomp(data1)
+cumsum(data1_pca$sdev^2 / sum(data1_pca$sdev^2)) %>% head(5)
+```
+
+- The first 5 principal components explain **36.85** percent of the variation in 
+our data.
+
+### Question 4) Show what aspect of the data the first and second principal component loadings capture like the example plot below
+
+```{r}
+set.seed(2023)
+pc_decompose <- function(k) {
+  Xnew <- data1_pca$x[,k, drop = FALSE] %*% t(data1_pca$rotation[,k,drop =FALSE])
+  as.data.frame(Xnew) %>%
+  imagedata_to_plotdata_1()  
+}
+
+Xnew <- data1_pca$x[,1, drop = FALSE] %*% t(data1_pca$rotation[,1,drop =FALSE])
+
+plot_letter %+% pc_decompose(1)
+plot_letter %+% pc_decompose(2)
+```
+
+### Question 5) Using the rotated data from the PCA, perform an agglomerative hierarchical clustering with average linkage.
+
+```{r}
+set.seed(2023)
+haverage <- hclust(dist(data1_pca$x), method = "average")
+```
+
+### Question 6) Cut the tree from question 5 to 4 clusters. Show how many observations you have per cluster.
+
+```{r}
+set.seed(2023)
+haverage_cut <- cutree(haverage, k = 4)
+table(haverage_cut)
+```
+
+
+### Question 7) Show a sample of 10 (or the total number of images in a cluster if less than 10 observations in a cluster) images from each cluster like the plot below. What do you notice about the cluster groups?
+
+
+```{r}
+data2 <- cbind(data1, haverage_cut)
+set.seed(2023)
+a <- data2 %>% filter(haverage_cut == 1)
+b <- data2 %>% filter(haverage_cut == 2)
+c <- data2 %>% filter(haverage_cut == 3)
+d <- data2 %>% filter(haverage_cut == 4)
+listall <- list(a,b,c,d)
+titles <- c("cluster 1", "cluster 2", "cluster 3", "cluster 4")
+imagedata_to_plotdata_3 <- function(data = ., 
+                                  titles,
+                                  w = 28, 
+                                  h = 28, 
+                                  which = sample(1:nrow(data), 
+                                                 ifelse(nrow(data) <10,
+                                                        nrow(data), 10))) {
+  
+    data %>% 
+    mutate(id = 1:n()) %>% 
+    filter(id %in% which) %>%
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id))) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) +
+    facet_wrap(id~haverage_cut, nrow = 10) +  
+    scale_y_reverse() +
+    theme_void(base_size = 5) +
+    theme(strip.text.x = element_blank()) +
+    guides(fill = "none") +
+    coord_equal() +
+    ggtitle(titles)
+  
+}
+cluster_agg <- map2(listall, titles, imagedata_to_plotdata_3)
+ggarrange(plotlist = cluster_agg, ncol = 4)
+
+```
+
+- Cluster 1: Cluster 1 majorly captures the letter in lower cases and the letters which are tilted towards right as well. It also captures upper case "M" but they almost look like lower cased letter "m".
+
+- Cluster 2: Cluster 2 captures upper cased "M". Their thickness varies but they are all upper cased "M".
+
+- Cluster 3: All the images are right aligned.
+
+- Cluster 4: Both the images have upper case "M" but they are not normally 
+written. One is with a tail on its left and one has the middle part weirdly 
+joined.
+
+
+## Report
+
+### Using kmeans method(into 3 clusters) to classify the main data
+
+```{r, class.source = 'fold-hide'}
+set.seed(2023)
+kout <- kmeans(data1_pca$x, centers = 3) 
+kmean <- as.factor(kout$cluster)
+data3 <- cbind(data1, kmean)
+
+e <- data3 %>% filter(kmean == 1)
+f <- data3 %>% filter(kmean == 2)
+g <- data3 %>% filter(kmean == 3)
+listall_3 <- list(e,f,g)
+titles_3 <- c("cluster 1", "cluster 2", "cluster 3")
+imagedata_to_plotdata_4 <- function(data = ., 
+                                  titles,
+                                  w = 28, 
+                                  h = 28, 
+                                  which = sample(1:nrow(data), 
+                                                 ifelse(nrow(data) <10, nrow(data), 10))) {
+  
+    data %>% 
+    mutate(id = 1:n()) %>% 
+    filter(id %in% which) %>%
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id))) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) +
+    facet_wrap(id~kmean, nrow = 10) +  #ye line mien facet kisse karna hai?
+    scale_y_reverse() +
+    theme_void(base_size = 5) +
+    theme(strip.text.x = element_blank()) +
+    guides(fill = "none") +
+    coord_equal() +
+    ggtitle(titles)
+  
+}
+fima <- map2(listall_3, titles_3, imagedata_to_plotdata_4)
+ggarrange(plotlist = fima, ncol = 4)
+
+```
+
+- **Cluster 1**: A significant amount of images have letters which are lower case. 
+Some of the lower case "m" have an extended line on their top left.  The letters 
+in the images are smaller and strokes are thinner irrespective of their case when
+compared to cluster 2 and 3.
+
+- **Cluster 2**: It hase roud/smooth edges. The letters have broader strokes and 
+center aligned. The middle leg of the letter seems thicker. Letters in this cluster 
+are a bit elongated so there is less distance from the top and bottom margins 
+when compared to cluster 1.  Some of the lower case "m" have an extended 
+line on their top left.
+
+- **Cluster 3**: The images in this cluster have relatively thick strokes. 
+This cluster has a fair share of both lower and upper case letters. The letters 
+are inclined towards right. Handwriting here seems more fluid. The letters have
+sharp edges.
+
+### Data preperation for model analysis
+
+Followed steps:
+
+- Splitting the main data-set into testing and training data-set.
+- Performing principal component analysis on the training data set to get PC.
+- Only selecting 80 PC's as it explains almost 90% of my data.
+
+
+```{r, class.source = 'fold-hide'}
+set.seed(2023)
+data_final <- cbind(data1, kmean)
+
+data1_split <- initial_split(data_final, prop = 7/10)
+train <- training(data1_split)
+test <- testing(data1_split)
+
+cluster_num_train <- train$kmean
+
+train_dum <- train %>%
+  select(-kmean)
+
+train_pca <- prcomp(train_dum)
+
+train_pca_selected <- cbind(as.data.frame(train_pca$x[,1:80]), cluster_num_train)
+
+cluster_num_test <- test$kmean
+test_dum <- test %>%
+  select(-kmean)
+
+test_new <- as.matrix(test_dum) %*% train_pca$rotation  
+
+test_new_selected <- cbind(as.data.frame(test_new[,1:80]), cluster_num_test)
+```
+
+
+### Applying 4 models on my training data and getting predictions for my test data-set
+
+- The applied supervised learning models are:
+1. **r_part** : Used for making classification and regression trees.
+2. **ranger** : Ranger is a fast implementation of Random Forest or recursive 
+partitioning, particularly suited for high dimensional data.
+3. **xgboost** : It implements many optimisation methods that allow for computationally 
+fast fit of the model (e.g. parallelised tree building, cache awareness computing, 
+efficient handling of missing data).
+4. **kknn** : For each row of the test set, the k nearest training set vectors 
+(according to Minkowski distance) are found, and the classification is done via 
+the maximum of summed kernel densities.
+
+```{r, class.source = 'fold-hide', echo = TRUE, message=FALSE, warning=FALSE}
+set.seed(2023)
+#rpart
+model_rpart <- rpart(cluster_num_train ~ ., data = train_pca_selected, method = "class")
+image_pred <- test_new_selected %>%
+  mutate(new_pred = predict(model_rpart, 
+                          type = "class",
+                          newdata = .)) 
+
+rpart_acc <- metrics(image_pred, cluster_num_test, new_pred) %>%
+  mutate(r_part = as.character("r_part"))
+
+#ranger
+model_rf <- ranger(cluster_num_train ~ ., 
+                   data = train_pca_selected,
+                   mtry = floor((ncol(train_pca_selected) - 1) / 3),
+                   importance = "impurity",
+                   num.trees = 500,
+                   classification = TRUE)
+rf_pred <- test_new_selected %>%
+  mutate(new_pred = predict(model_rf, test_new_selected)$prediction)
+
+
+ranger_acc <- metrics(rf_pred, cluster_num_test, new_pred) %>%
+  mutate(r_part = as.character("ranger"))
+
+#xgboost
+model_xg <- xgboost(data = as.matrix(train_pca_selected[,1:80]), 
+                 label = train_pca_selected$cluster_num_train, 
+                 eta = 1,
+                 max.depth = 2,
+                 nrounds = 10, 
+                 objective = "multi:softmax", 
+                 num_class = 4,
+                 verbose = 0)
+
+xg_pred <- test_new_selected %>%
+  mutate(new_pred = predict(model_xg, model.matrix(~ . - cluster_num_test, data = .)[, -1])) %>%
+  mutate(new_pred = as.factor(new_pred))
+
+
+xg_acc <- metrics(xg_pred, cluster_num_test, new_pred) %>%
+  mutate(r_part = as.character("xg_boost"))
+
+
+
+#knn
+model_knn <- kknn(cluster_num_train ~ ., 
+                 train = train_pca_selected,
+                 test = test_new_selected,
+                 k = 10,
+                 # parameter of Minkowski distance 
+                 # 2 = Euclidean distance 
+                 # 1 = Manhattan distance
+                 distance = 2)
+kknn_pred <- test_new_selected %>%
+  mutate(new_pred = model_knn$fitted.values) 
+knn_acc <- metrics(kknn_pred, cluster_num_test, new_pred) %>%
+  mutate(r_part = as.character("knn"))
+```
+
+### Plotting accuracy and kappa metrics to to check performance of each model.
+
+```{r, class.source = 'fold-hide'}
+set.seed(2023)
+
+metrics_df <- rbind(rpart_acc, knn_acc, xg_acc, ranger_acc) %>%
+  rename(model_type = r_part) %>%
+  ggplot(aes(x = reorder(model_type, .estimate),
+             y = .estimate,
+             fill = .metric)) + 
+  geom_bar(position="dodge", stat="identity")
+metrics_df
+```
+
+- K-nearest neighbour gives the best accuracy and kappa metrics and by a big margin.
+
+```{r, class.source = 'fold-hide'}
+set.seed(2023)
+imagedata_to_plotdata <- function(data = new_records, 
+                                  w = 28, 
+                                  h = 28) {
+  data %>% 
+    mutate(id = 1:n())%>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+plot_letter_report <- imagedata_to_plotdata(new_records) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) +
+    facet_wrap(~id, nrow = 3) +
+    scale_y_reverse() +
+    theme_void(base_size = 18) +
+    guides(fill = "none") +
+    coord_equal()
+
+plot_letter_report
+```
+
+### Classifying new_records observation in the 3 clusters (obtained by applying kmeans method) by applying the optimal model obtained in the previous step
+
+```{r, class.source = 'fold-hide'}
+set.seed(2023)
+last_data <- as.data.frame(cbind(data1_pca$x[,1:80], kmean)) %>%
+  mutate(kmean = as.factor(kmean))
+test_new <- as.data.frame(as.matrix(new_records) %*% data1_pca$rotation)[,1:80] 
+knn_pred_last <- kknn(kmean ~ ., 
+                 train = last_data,
+                 test = test_new,
+                 k = 10,
+                 distance = 2)
+
+knn_pred_last$fitted.values
+
+```
+
+1. Image classified in cluster 2 (Images 1,2,4,5)
+- Has an extender part on it's top left portion or the left top corner is slightly 
+bigger
+- Lower case "m"
+- Is aligned in the center
+- Round/smooth edges 
+
+2. Third image classified in cluster 3 (Image 3)
+- thick strokes in comparison to cluster 1 and cluster 2 while writing the whole 
+letter
+- It is tilted towards right
+- It has sharp edges
+
+
+### Conclusion
+
+- The kknn model was significantly better than the other models applied. 
+- The images in new_records data-set were almost similar so 80% of the images
+were clustered in the same group.
+- Image 1 could have been clustered in cluster 3 as it is right aligned but
+it also has similarities with cluster 2.
+
+### References 
+- Lecture slides of Introduction to Machine learning (ETC5250)
+- https://www.rdocumentation.org/packages/kknn/versions/1.3.1/topics/kknn
+- https://www.analyticsvidhya.com/blog/2016/01/xgboost-algorithm-easy-steps/#:~:text=What%20is%20XGBoost%3F,computation%20on%20a%20single%20machine.
+- https://www.imsbio.co.jp/RGM/R_rdfile?f=ranger/man/ranger.Rd&d=R_CC#:~:text=Description,and%20survival%20forests%20are%20supported.
